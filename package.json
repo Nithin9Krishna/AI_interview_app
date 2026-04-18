@@ -1,0 +1,22 @@
+{
+  "name": "ai-interview-platform",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n api,web,mobile -c cyan,green,magenta \"npm run dev -w apps/api\" \"npm run dev -w apps/web\" \"npm run start -w apps/mobile\"",
+    "dev:api": "npm run dev -w apps/api",
+    "dev:web": "npm run dev -w apps/web",
+    "dev:mobile": "npm run start -w apps/mobile",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "devDependencies": {
+    "@types/node": "25.6.0",
+    "concurrently": "9.2.1",
+    "typescript": "5.9.2"
+  }
+}

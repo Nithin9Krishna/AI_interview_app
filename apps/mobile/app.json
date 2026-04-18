@@ -1,0 +1,20 @@
+{
+  "expo": {
+    "name": "AI Interview",
+    "slug": "ai-interview",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.aiinterview.mvp"
+    },
+    "android": {
+      "package": "com.aiinterview.mvp"
+    },
+    "web": {
+      "bundler": "metro"
+    }
+  }
+}
