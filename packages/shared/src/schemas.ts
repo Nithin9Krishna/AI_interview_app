@@ -5,7 +5,7 @@ export const senioritySchema = z.enum(["intern", "junior", "mid", "senior", "sta
 export const jobProfileSchema = z.object({
   title: z.string().min(2, "Job title is required"),
   company: z.string().optional(),
-  description: z.string().min(80, "Paste a fuller job description to generate a useful interview"),
+  description: z.string().min(12, "Add at least a short job description"),
   seniority: senioritySchema,
   skills: z.array(z.string()).default([])
 });

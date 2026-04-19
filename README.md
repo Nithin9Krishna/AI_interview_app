@@ -54,6 +54,8 @@ The web app is standalone by default. It generates questions, speaks prompts wit
 
 Live voice capture works best in Chrome or Edge on `localhost` because browser speech recognition support varies. Camera/microphone permissions are required for the live interview room.
 
+Short job descriptions are supported. For example, a title like `Power BI Analyst` with `We are hiring a Power BI Developer` will still generate Power BI, DAX, Power Query, data modeling, and dashboarding interview questions.
+
 Start the mobile app:
 
 ```bash

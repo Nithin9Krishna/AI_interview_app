@@ -8,6 +8,20 @@ import type {
 } from "./types";
 
 const KNOWN_SKILLS = [
+  "power bi",
+  "dax",
+  "power query",
+  "dashboarding",
+  "dashboard",
+  "business intelligence",
+  "bi reporting",
+  "data modeling",
+  "data visualization",
+  "etl",
+  "excel",
+  "azure data factory",
+  "data analysis",
+  "analytics",
   "react",
   "next.js",
   "node.js",
@@ -50,30 +64,60 @@ export function inferSkills(description: string, providedSkills: string[] = []):
     .map((skill) => skill.trim())
     .filter(Boolean);
 
-  return Array.from(new Set(combined)).slice(0, 8);
+  const uniqueSkills = Array.from(new Set(combined));
+
+  if (uniqueSkills.length) {
+    return expandRelatedSkills(uniqueSkills).slice(0, 8);
+  }
+
+  return inferFallbackSkills(normalizedDescription).slice(0, 8);
 }
 
 export function generateInterviewPlan(profile: JobProfile): InterviewPlan {
-  const skills = inferSkills(profile.description, profile.skills);
+  const skills = inferSkills(`${profile.title} ${profile.description}`, profile.skills);
   const primarySkill = skills[0] ?? "the core technology stack";
   const secondarySkill = skills[1] ?? "production engineering";
   const difficulty = SENIORITY_DIFFICULTY[profile.seniority];
   const roleContext = `${profile.seniority} ${profile.title}`.trim();
+  const isDataRole = skills.some((skill) =>
+    [
+      "power bi",
+      "dax",
+      "power query",
+      "dashboarding",
+      "dashboard",
+      "business intelligence",
+      "bi reporting",
+      "data modeling",
+      "data visualization",
+      "etl",
+      "data analysis",
+      "analytics",
+      "sql"
+    ].includes(skill)
+  );
 
   const questions: InterviewQuestion[] = [
     {
       id: createId("q"),
       round: "technical",
       difficulty,
-      prompt: `Walk me through how you would approach a real ${roleContext} task that heavily uses ${primarySkill}. What tradeoffs would you consider?`,
+      prompt: isDataRole
+        ? `Walk me through how you would build a reliable ${primarySkill} solution for a real ${roleContext} request. How would you gather requirements, model the data, validate metrics, and handle stakeholder feedback?`
+        : `Walk me through how you would approach a real ${roleContext} task that heavily uses ${primarySkill}. What tradeoffs would you consider?`,
       expectedSignals: [
         "clear technical decomposition",
         `practical experience with ${primarySkill}`,
-        "awareness of tradeoffs and failure modes"
+        "awareness of tradeoffs and failure modes",
+        ...(isDataRole ? ["requirements clarity", "data validation", "business metric accuracy"] : [])
       ],
       followUps: [
-        "What would you do differently if this had to support 10x more users?",
-        "Which part of your solution would you validate first?"
+        isDataRole
+          ? "How would you verify the dashboard numbers match the source of truth?"
+          : "What would you do differently if this had to support 10x more users?",
+        isDataRole
+          ? "How would you handle a stakeholder asking for a metric that is poorly defined?"
+          : "Which part of your solution would you validate first?"
       ]
     },
     {
@@ -95,15 +139,17 @@ export function generateInterviewPlan(profile: JobProfile): InterviewPlan {
       id: createId("q"),
       round: "coding",
       difficulty,
-      prompt: `Design an algorithm or implementation plan for a feature in this role that uses ${primarySkill} and ${secondarySkill}. Explain correctness, complexity, and edge cases.`,
+      prompt: isDataRole
+        ? `Design the technical approach for a ${roleContext} reporting task using ${primarySkill} and ${secondarySkill}. Explain the data model, transformations, DAX/SQL logic, refresh strategy, edge cases, and how you would test accuracy.`
+        : `Design an algorithm or implementation plan for a feature in this role that uses ${primarySkill} and ${secondarySkill}. Explain correctness, complexity, and edge cases.`,
       expectedSignals: [
-        "structured algorithmic thinking",
-        "complexity discussion",
+        isDataRole ? "structured data modeling" : "structured algorithmic thinking",
+        isDataRole ? "metric validation" : "complexity discussion",
         "edge case handling"
       ],
       followUps: [
-        "What test cases would give you confidence?",
-        "Where could this implementation break in production?"
+        isDataRole ? "What data quality checks would you build before publishing?" : "What test cases would give you confidence?",
+        isDataRole ? "What could make this report misleading in production?" : "Where could this implementation break in production?"
       ]
     },
     {
@@ -134,6 +180,36 @@ export function generateInterviewPlan(profile: JobProfile): InterviewPlan {
     questions,
     estimatedMinutes: questions.length * 8
   };
+}
+
+function inferFallbackSkills(normalizedDescription: string): string[] {
+  if (/\b(data|analyst|analytics|report|reporting|dashboard|bi|business intelligence)\b/.test(normalizedDescription)) {
+    return ["data analysis", "dashboarding", "sql", "data modeling"];
+  }
+
+  if (/\b(manager|lead|product|project)\b/.test(normalizedDescription)) {
+    return ["stakeholder communication", "prioritization", "problem solving"];
+  }
+
+  return ["role-specific problem solving", "communication", "ownership"];
+}
+
+function expandRelatedSkills(skills: string[]): string[] {
+  const expanded = [...skills];
+
+  if (skills.includes("power bi")) {
+    expanded.push("dax", "power query", "data modeling", "dashboarding");
+  }
+
+  if (skills.some((skill) => ["business intelligence", "bi reporting", "dashboard", "dashboarding"].includes(skill))) {
+    expanded.push("data visualization", "data modeling", "sql");
+  }
+
+  if (skills.some((skill) => ["data analysis", "analytics", "etl"].includes(skill))) {
+    expanded.push("sql", "data validation", "stakeholder communication");
+  }
+
+  return Array.from(new Set(expanded));
 }
 
 export function evaluateCandidateAnswer(question: InterviewQuestion, answerText: string): AnswerEvaluation {

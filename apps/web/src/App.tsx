@@ -13,6 +13,7 @@ import {
 } from "@ai-interview/shared";
 
 type Screen = "landing" | "setup" | "onboarding" | "interview" | "dashboard";
+const MIN_JOB_DESCRIPTION_LENGTH = 12;
 
 const demoDescription =
   "We are hiring a full-stack engineer to build React, TypeScript, Node.js, PostgreSQL, and AI-powered product features. The role requires strong system design, API development, testing, collaboration, clear communication, secure product thinking, and ownership of production reliability.";
@@ -62,6 +63,8 @@ export function App() {
 
   const activeQuestion = plan?.questions[activeQuestionIndex] ?? null;
   const activeAnswer = activeQuestion ? answers[activeQuestion.id] ?? "" : "";
+  const setupIssue = getSetupIssue(title, description);
+  const canGenerateInterview = !setupIssue;
   const canStartInterview = Boolean(plan && consentAccepted);
   const canEvaluate = Boolean(activeQuestion && activeAnswer.trim().length >= 20);
   const currentProgress = plan ? Math.round(((activeQuestionIndex + 1) / plan.questions.length) * 100) : 0;
@@ -125,10 +128,17 @@ export function App() {
   }, [mediaStream]);
 
   function createInterview() {
+    const issue = getSetupIssue(title, description);
+
+    if (issue) {
+      setNotice(issue);
+      return;
+    }
+
     const generatedPlan = generateInterviewPlan({
-      title,
+      title: title.trim(),
       company,
-      description,
+      description: description.trim(),
       seniority,
       skills: []
     });
@@ -142,7 +152,7 @@ export function App() {
     setFacialSignals([]);
     setInterimTranscript("");
     setAiResponse("I created your interview. After consent, I will speak the questions and listen to the candidate live.");
-    setNotice("Interview generated locally by Luminary Onboard AI. Review consent before launching.");
+    setNotice("Interview generated locally by Luminary Onboard AI. Review the questions, then complete consent to start.");
     setScreen("onboarding");
   }
 
@@ -199,6 +209,13 @@ export function App() {
     }
 
     stopListening();
+
+    if (activeQuestionIndex >= plan.questions.length - 1) {
+      setNotice("All interview questions are complete. Review the final report.");
+      setScreen("dashboard");
+      return;
+    }
+
     const nextIndex = Math.min(activeQuestionIndex + 1, plan.questions.length - 1);
     setActiveQuestionIndex(nextIndex);
     setEvaluation(null);
@@ -395,16 +412,18 @@ export function App() {
         <SetupScreen
           company={company}
           description={description}
-          isReady={description.length >= 80}
+          isReady={canGenerateInterview}
           plan={plan}
           seniority={seniority}
+          setupIssue={setupIssue}
           title={title}
           onCompanyChange={setCompany}
           onCreateInterview={createInterview}
           onDescriptionChange={setDescription}
           onSelectQuestion={(index) => {
             setActiveQuestionIndex(index);
-            setScreen("interview");
+            setNotice("Question selected. Complete consent before opening the live camera/microphone interview room.");
+            setScreen("onboarding");
           }}
           onSeniorityChange={setSeniority}
           onTitleChange={setTitle}
@@ -592,6 +611,7 @@ function SetupScreen({
   isReady,
   plan,
   seniority,
+  setupIssue,
   title,
   onCompanyChange,
   onCreateInterview,
@@ -605,6 +625,7 @@ function SetupScreen({
   isReady: boolean;
   plan: InterviewPlan | null;
   seniority: SeniorityLevel;
+  setupIssue: string | null;
   title: string;
   onCompanyChange: (value: string) => void;
   onCreateInterview: () => void;
@@ -659,6 +680,9 @@ function SetupScreen({
         <button className="primaryAction" disabled={!isReady} type="submit">
           Generate interview
         </button>
+        <p className={setupIssue ? "formHint error" : "formHint"}>
+          {setupIssue ?? "Short JDs are okay. The AI will combine the title, seniority, and description to create role-specific questions."}
+        </p>
       </form>
 
       <section className="panel planPanel">
@@ -880,6 +904,8 @@ function InterviewScreen({
     );
   }
 
+  const isLastQuestion = activeQuestionIndex >= plan.questions.length - 1;
+
   return (
     <section className="interviewShell">
       <div className="interviewHeader">
@@ -961,7 +987,7 @@ function InterviewScreen({
 
           <div className="interviewActions">
             <button className="secondaryAction" onClick={onNext} type="button">
-              Next question
+              {isLastQuestion ? "Finish interview" : "Next question"}
             </button>
             <button className="primaryAction" disabled={!canEvaluate} onClick={onEvaluate} type="button">
               Evaluate live answer
@@ -1222,6 +1248,18 @@ function SignalRow({ label, value }: { label: string; value: number }) {
       </i>
     </div>
   );
+}
+
+function getSetupIssue(title: string, description: string) {
+  if (title.trim().length < 2) {
+    return "Add a role title before generating the interview.";
+  }
+
+  if (description.trim().length < MIN_JOB_DESCRIPTION_LENGTH) {
+    return `Add at least ${MIN_JOB_DESCRIPTION_LENGTH} characters in the job description. A short JD like "We are hiring a Power BI Developer" is enough.`;
+  }
+
+  return null;
 }
 
 function buildFacialSignalSample(
