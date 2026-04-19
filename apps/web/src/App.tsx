@@ -36,6 +36,8 @@ interface FacialSignalSummary {
   observations: string[];
 }
 
+type MediaStatus = "idle" | "requesting" | "ready" | "audio_only" | "blocked";
+
 export function App() {
   const [screen, setScreen] = useState<Screen>("landing");
   const [title, setTitle] = useState("Full Stack AI Engineer");
@@ -53,13 +55,14 @@ export function App() {
   const [notice, setNotice] = useState("Standalone mode active. Luminary Onboard AI runs locally in this app.");
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [mediaStream, setMediaStream] = useState<MediaStream | null>(null);
-  const [mediaStatus, setMediaStatus] = useState<"idle" | "requesting" | "ready" | "blocked">("idle");
+  const [mediaStatus, setMediaStatus] = useState<MediaStatus>("idle");
   const [isListening, setIsListening] = useState(false);
   const [interimTranscript, setInterimTranscript] = useState("");
   const [facialSignals, setFacialSignals] = useState<FacialSignalSample[]>([]);
   const [aiResponse, setAiResponse] = useState("I will ask each question out loud, listen to your answer, and then generate a final recruiter report.");
   const recognitionRef = useRef<BrowserSpeechRecognition | null>(null);
   const shouldKeepListeningRef = useRef(false);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
 
   const activeQuestion = plan?.questions[activeQuestionIndex] ?? null;
   const activeAnswer = activeQuestion ? answers[activeQuestion.id] ?? "" : "";
@@ -121,11 +124,15 @@ export function App() {
   }, [screen]);
 
   useEffect(() => {
+    mediaStreamRef.current = mediaStream;
+  }, [mediaStream]);
+
+  useEffect(() => {
     return () => {
       stopListening();
-      mediaStream?.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
     };
-  }, [mediaStream]);
+  }, []);
 
   function createInterview() {
     const issue = getSetupIssue(title, description);
@@ -180,7 +187,12 @@ export function App() {
       return;
     }
 
-    setNotice("Live interview room started. Camera, microphone, voice transcript, and visual signals are active.");
+    const hasVideo = stream.getVideoTracks().some((track) => track.readyState === "live");
+    setNotice(
+      hasVideo
+        ? "Live interview room started. Camera, microphone, voice transcript, and visual signals are active."
+        : "Live interview room started with microphone access. Camera is unavailable, so visual signals are disabled."
+    );
     window.setTimeout(() => speakQuestion(activeQuestion), 250);
   }
 
@@ -278,7 +290,7 @@ export function App() {
     const stream = mediaStream ?? (await requestLiveMedia());
 
     if (!stream) {
-      setNotice("Camera/microphone permission is required before the AI can listen. Click retry and allow access.");
+      setNotice("Microphone permission is required before the AI can listen. Click retry and allow microphone access.");
       return;
     }
 
@@ -286,38 +298,59 @@ export function App() {
   }
 
   async function requestLiveMedia() {
-    if (mediaStream) {
+    if (mediaStatus === "ready" && mediaStream) {
       return mediaStream;
     }
 
     if (!navigator.mediaDevices?.getUserMedia) {
       setMediaStatus("blocked");
-      recordEvent("camera_unavailable", "high", "Browser does not support camera and microphone capture.");
+      recordEvent("camera_unavailable", "high", "Browser does not support camera or microphone capture.");
       return null;
     }
 
     setMediaStatus("requesting");
 
+    let audioStream = mediaStream?.getAudioTracks().some((track) => track.readyState === "live")
+      ? new MediaStream(mediaStream.getAudioTracks())
+      : null;
+
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true
-        },
+      if (!audioStream) {
+        audioStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true
+          },
+          video: false
+        });
+      }
+    } catch {
+      setMediaStatus("blocked");
+      recordEvent("camera_unavailable", "high", "Microphone permission was blocked or no microphone is available.");
+      return null;
+    }
+
+    try {
+      const videoStream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
         video: {
           width: { ideal: 1280 },
           height: { ideal: 720 },
           facingMode: "user"
         }
       });
+      const stream = new MediaStream([...audioStream.getAudioTracks(), ...videoStream.getVideoTracks()]);
 
+      mediaStream?.getVideoTracks().forEach((track) => track.stop());
       setMediaStream(stream);
       setMediaStatus("ready");
       return stream;
     } catch {
-      setMediaStatus("blocked");
-      recordEvent("camera_unavailable", "high", "Candidate blocked or dismissed camera/microphone permissions.");
-      return null;
+      const audioOnlyStream = new MediaStream(audioStream.getAudioTracks());
+      setMediaStream(audioOnlyStream);
+      setMediaStatus("audio_only");
+      recordEvent("camera_unavailable", "medium", "Camera permission was blocked or no camera is available. Microphone is available.");
+      return audioOnlyStream;
     }
   }
 
@@ -846,7 +879,7 @@ function InterviewScreen({
   interimTranscript: string;
   isListening: boolean;
   isSpeaking: boolean;
-  mediaStatus: "idle" | "requesting" | "ready" | "blocked";
+  mediaStatus: MediaStatus;
   mediaStream: MediaStream | null;
   plan: InterviewPlan | null;
   proctoringEvents: ProctoringEvent[];
@@ -921,6 +954,8 @@ function InterviewScreen({
   }
 
   const isLastQuestion = activeQuestionIndex >= plan.questions.length - 1;
+  const hasAudioAccess = mediaStatus === "ready" || mediaStatus === "audio_only";
+  const hasVideoAccess = mediaStatus === "ready";
 
   return (
     <section className="interviewShell">
@@ -944,12 +979,23 @@ function InterviewScreen({
         <section className="interviewPanel">
           <div className="liveInterviewGrid">
             <div className="cameraStage">
-              <video aria-label="Candidate live camera preview" autoPlay muted playsInline ref={videoRef} />
+              {hasVideoAccess ? (
+                <video aria-label="Candidate live camera preview" autoPlay muted playsInline ref={videoRef} />
+              ) : (
+                <div className="cameraFallback">
+                  <span>{hasAudioAccess ? "MIC" : "CAM"}</span>
+                  <p>{hasAudioAccess ? "Microphone is live. Camera is optional for this run." : "Camera preview will appear after permission is allowed."}</p>
+                </div>
+              )}
               <div className="cameraOverlay">
-                <span className={mediaStatus === "ready" ? "cameraStatus ready" : "cameraStatus blocked"}>
-                  {mediaStatus === "ready" ? "Camera live" : "Camera pending"}
+                <span className={getCameraStatusClass(mediaStatus)}>
+                  {getCameraStatusLabel(mediaStatus)}
                 </span>
-                <span>Expression signal: {visualSummary.dominantExpression.replace("-", " ")}</span>
+                <span>
+                  {hasVideoAccess
+                    ? `Expression signal: ${visualSummary.dominantExpression.replace("-", " ")}`
+                    : "Visual signals paused"}
+                </span>
               </div>
             </div>
 
@@ -963,9 +1009,9 @@ function InterviewScreen({
           </div>
 
           <div className="voiceControls">
-            {mediaStatus !== "ready" ? (
+            {!hasVideoAccess ? (
               <button className="primaryAction" onClick={onRequestMedia} type="button">
-                {mediaStatus === "requesting" ? "Waiting for permission..." : "Retry camera and mic"}
+                {mediaStatus === "requesting" ? "Waiting for permission..." : hasAudioAccess ? "Retry camera" : "Retry microphone"}
               </button>
             ) : null}
             <button className="secondaryAction" onClick={onSpeak} type="button">
@@ -976,15 +1022,16 @@ function InterviewScreen({
                 Pause listening
               </button>
             ) : (
-              <button className="primaryAction" disabled={mediaStatus !== "ready"} onClick={onStartListening} type="button">
+              <button className="primaryAction" disabled={!hasAudioAccess} onClick={onStartListening} type="button">
                 Start listening
               </button>
             )}
           </div>
-          {mediaStatus !== "ready" ? (
+          {!hasVideoAccess ? (
             <p className="mediaHelp">
-              If the browser blocked access, click the camera icon in the address bar, allow camera and microphone,
-              then retry. You can still see the interview room while fixing permissions.
+              {hasAudioAccess
+                ? "Microphone access is working, so the interview can continue. If you want facial/presence signals, allow camera access from the browser address bar and retry camera."
+                : "Microphone access is required for live answers. Click the camera/microphone icon in the address bar, allow microphone access, then retry."}
             </p>
           ) : null}
 
@@ -1277,6 +1324,38 @@ function SignalRow({ label, value }: { label: string; value: number }) {
   );
 }
 
+function getCameraStatusLabel(status: MediaStatus) {
+  if (status === "ready") {
+    return "Camera and mic live";
+  }
+
+  if (status === "audio_only") {
+    return "Mic live, camera off";
+  }
+
+  if (status === "requesting") {
+    return "Permission pending";
+  }
+
+  if (status === "blocked") {
+    return "Permission blocked";
+  }
+
+  return "Permission needed";
+}
+
+function getCameraStatusClass(status: MediaStatus) {
+  if (status === "ready") {
+    return "cameraStatus ready";
+  }
+
+  if (status === "audio_only") {
+    return "cameraStatus audioOnly";
+  }
+
+  return "cameraStatus blocked";
+}
+
 function getSetupIssue(title: string, description: string) {
   if (title.trim().length < 2) {
     return "Add a role title before generating the interview.";
@@ -1330,13 +1409,13 @@ function summarizeFacialSignals(samples: FacialSignalSample[]): FacialSignalSumm
   if (!samples.length) {
     return {
       sampleCount: 0,
-      visibilityScore: 85,
-      lightingScore: 85,
-      expressionEnergy: 50,
-      dominantExpression: "engaged",
-      sessionQualityScore: 88,
+      visibilityScore: 0,
+      lightingScore: 0,
+      expressionEnergy: 0,
+      dominantExpression: "low-visibility",
+      sessionQualityScore: 75,
       observations: [
-        "Camera analysis has not started yet. The report will update after the live interview begins."
+        "No camera samples have been captured yet. This may be normal if the interview is running in microphone-only mode."
       ]
     };
   }

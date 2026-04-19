@@ -931,6 +931,36 @@ h3 {
   transform: scaleX(-1);
 }
 
+.cameraFallback {
+  display: grid;
+  min-height: 360px;
+  place-items: center;
+  align-content: center;
+  gap: 0.85rem;
+  padding: 2rem;
+  color: #d4d4d8;
+  text-align: center;
+}
+
+.cameraFallback span {
+  display: grid;
+  width: 5rem;
+  height: 5rem;
+  place-items: center;
+  border-radius: 999px;
+  color: #ffffff;
+  background: linear-gradient(135deg, var(--indigo), var(--violet));
+  font-size: 1rem;
+  font-weight: 950;
+  box-shadow: 0 0 0 12px rgba(79, 70, 229, 0.14);
+}
+
+.cameraFallback p {
+  max-width: 280px;
+  margin: 0;
+  color: #a1a1aa;
+}
+
 .cameraOverlay {
   position: absolute;
   right: 1rem;
@@ -959,6 +989,11 @@ h3 {
 .listeningBadge.active {
   color: #ecfdf5;
   background: rgba(5, 150, 105, 0.88);
+}
+
+.cameraStatus.audioOnly {
+  color: #fffbeb;
+  background: rgba(217, 119, 6, 0.9);
 }
 
 .cameraStatus.blocked {
