@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   evaluateCandidateAnswer,
   generateInterviewPlan,
@@ -17,24 +17,23 @@ type Screen = "landing" | "setup" | "onboarding" | "interview" | "dashboard";
 const demoDescription =
   "We are hiring a full-stack engineer to build React, TypeScript, Node.js, PostgreSQL, and AI-powered product features. The role requires strong system design, API development, testing, collaboration, clear communication, secure product thinking, and ownership of production reliability.";
 
-const defaultCode = `function findLongestSubarray(arr, k) {
-  let left = 0;
-  let currentSum = 0;
-  let maxLength = 0;
+interface FacialSignalSample {
+  occurredAt: string;
+  visibilityScore: number;
+  lightingScore: number;
+  expressionEnergy: number;
+  expressionLabel: "calm" | "engaged" | "animated" | "low-visibility";
+}
 
-  for (let right = 0; right < arr.length; right++) {
-    currentSum += arr[right];
-
-    while (currentSum > k) {
-      currentSum -= arr[left];
-      left++;
-    }
-
-    maxLength = Math.max(maxLength, right - left + 1);
-  }
-
-  return maxLength;
-}`;
+interface FacialSignalSummary {
+  sampleCount: number;
+  visibilityScore: number;
+  lightingScore: number;
+  expressionEnergy: number;
+  dominantExpression: FacialSignalSample["expressionLabel"];
+  sessionQualityScore: number;
+  observations: string[];
+}
 
 export function App() {
   const [screen, setScreen] = useState<Screen>("landing");
@@ -45,7 +44,6 @@ export function App() {
   const [plan, setPlan] = useState<InterviewPlan | null>(null);
   const [activeQuestionIndex, setActiveQuestionIndex] = useState(0);
   const [answers, setAnswers] = useState<Record<string, string>>({});
-  const [codeDraft, setCodeDraft] = useState(defaultCode);
   const [evaluation, setEvaluation] = useState<AnswerEvaluation | null>(null);
   const [proctoringEvents, setProctoringEvents] = useState<ProctoringEvent[]>([]);
   const [proctoringSummary, setProctoringSummary] = useState<ProctoringSummary | null>(null);
@@ -53,14 +51,27 @@ export function App() {
   const [focusModeStarted, setFocusModeStarted] = useState(false);
   const [notice, setNotice] = useState("Standalone mode active. Luminary Onboard AI runs locally in this app.");
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [mediaStream, setMediaStream] = useState<MediaStream | null>(null);
+  const [mediaStatus, setMediaStatus] = useState<"idle" | "requesting" | "ready" | "blocked">("idle");
+  const [isListening, setIsListening] = useState(false);
+  const [interimTranscript, setInterimTranscript] = useState("");
+  const [facialSignals, setFacialSignals] = useState<FacialSignalSample[]>([]);
+  const [aiResponse, setAiResponse] = useState("I will ask each question out loud, listen to your answer, and then generate a final recruiter report.");
+  const recognitionRef = useRef<BrowserSpeechRecognition | null>(null);
+  const shouldKeepListeningRef = useRef(false);
 
   const activeQuestion = plan?.questions[activeQuestionIndex] ?? null;
   const activeAnswer = activeQuestion ? answers[activeQuestion.id] ?? "" : "";
   const canStartInterview = Boolean(plan && consentAccepted);
   const canEvaluate = Boolean(activeQuestion && activeAnswer.trim().length >= 20);
   const currentProgress = plan ? Math.round(((activeQuestionIndex + 1) / plan.questions.length) * 100) : 0;
-  const fitScore = evaluation ? evaluation.overallScore * 10 : 86;
-  const trustScore = proctoringSummary ? trustScoreFromRisk(proctoringSummary.riskLevel) : 96;
+  const visualSummary = summarizeFacialSignals(facialSignals);
+  const fitScore = evaluation
+    ? clampScore(evaluation.overallScore * 10 + Math.round((visualSummary.sessionQualityScore - 75) / 5), 1, 100)
+    : 86;
+  const trustScore = proctoringSummary
+    ? Math.min(trustScoreFromRisk(proctoringSummary.riskLevel), visualSummary.sessionQualityScore)
+    : visualSummary.sessionQualityScore;
 
   useEffect(() => {
     const handleVisibility = () => {
@@ -100,6 +111,19 @@ export function App() {
     };
   }, [focusModeStarted, screen]);
 
+  useEffect(() => {
+    if (screen !== "interview") {
+      stopListening();
+    }
+  }, [screen]);
+
+  useEffect(() => {
+    return () => {
+      stopListening();
+      mediaStream?.getTracks().forEach((track) => track.stop());
+    };
+  }, [mediaStream]);
+
   function createInterview() {
     const generatedPlan = generateInterviewPlan({
       title,
@@ -115,6 +139,9 @@ export function App() {
     setEvaluation(null);
     setProctoringEvents([]);
     setProctoringSummary(null);
+    setFacialSignals([]);
+    setInterimTranscript("");
+    setAiResponse("I created your interview. After consent, I will speak the questions and listen to the candidate live.");
     setNotice("Interview generated locally by Luminary Onboard AI. Review consent before launching.");
     setScreen("onboarding");
   }
@@ -125,9 +152,16 @@ export function App() {
       return;
     }
 
+    const stream = await requestLiveMedia();
+
+    if (!stream) {
+      setNotice("Camera and microphone access are required for the live AI interview.");
+      return;
+    }
+
     setFocusModeStarted(true);
     setScreen("interview");
-    setNotice("Interview room started. Proctoring signals are being tracked locally for this session.");
+    setNotice("Live interview room started. Camera, microphone, voice transcript, and visual signals are active.");
 
     if (!document.fullscreenElement) {
       await document.documentElement.requestFullscreen().catch(() => {
@@ -143,17 +177,20 @@ export function App() {
       return;
     }
 
-    const mergedAnswer =
-      activeQuestion.round === "coding"
-        ? `${activeAnswer}\n\nCandidate code:\n${codeDraft}`
-        : activeAnswer;
+    stopListening();
 
-    const nextEvaluation = evaluateCandidateAnswer(activeQuestion, mergedAnswer);
+    const nextEvaluation = enhanceEvaluationWithLiveSignals(
+      evaluateCandidateAnswer(activeQuestion, activeAnswer),
+      visualSummary
+    );
     const nextProctoringSummary = summarizeProctoring(proctoringEvents);
+    const interviewerResponse = buildInterviewerResponse(nextEvaluation, activeQuestion);
 
     setEvaluation(nextEvaluation);
     setProctoringSummary(nextProctoringSummary);
-    setNotice("Answer evaluated by the local Onboard AI model. Recruiter report is ready.");
+    setAiResponse(interviewerResponse);
+    setNotice("Live answer evaluated. The final report now includes transcript, proctoring, and visual signal context.");
+    speakText(interviewerResponse, nextEvaluation.overallScore < 8);
   }
 
   function goToNextQuestion() {
@@ -161,20 +198,22 @@ export function App() {
       return;
     }
 
+    stopListening();
     const nextIndex = Math.min(activeQuestionIndex + 1, plan.questions.length - 1);
     setActiveQuestionIndex(nextIndex);
     setEvaluation(null);
+    setInterimTranscript("");
     speakQuestion(plan.questions[nextIndex]);
   }
 
-  function updateActiveAnswer(value: string) {
+  function appendActiveAnswer(value: string) {
     if (!activeQuestion) {
       return;
     }
 
     setAnswers((current) => ({
       ...current,
-      [activeQuestion.id]: value
+      [activeQuestion.id]: `${current[activeQuestion.id] ?? ""} ${value}`.trim()
     }));
   }
 
@@ -183,14 +222,149 @@ export function App() {
       return;
     }
 
+    stopListening();
+    setAiResponse(question.prompt);
+    speakText(question.prompt, true);
+  }
+
+  function speakText(text: string, listenAfterSpeech: boolean) {
+    if (!("speechSynthesis" in window)) {
+      if (listenAfterSpeech) {
+        startListening();
+      }
+      return;
+    }
+
     window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(question.prompt);
+    const utterance = new SpeechSynthesisUtterance(text);
     utterance.rate = 0.94;
     utterance.pitch = 1;
     utterance.onstart = () => setIsSpeaking(true);
-    utterance.onend = () => setIsSpeaking(false);
-    utterance.onerror = () => setIsSpeaking(false);
+    utterance.onend = () => {
+      setIsSpeaking(false);
+      if (listenAfterSpeech) {
+        startListening();
+      }
+    };
+    utterance.onerror = () => {
+      setIsSpeaking(false);
+      if (listenAfterSpeech) {
+        startListening();
+      }
+    };
     window.speechSynthesis.speak(utterance);
+  }
+
+  async function requestLiveMedia() {
+    if (mediaStream) {
+      return mediaStream;
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setMediaStatus("blocked");
+      recordEvent("camera_unavailable", "high", "Browser does not support camera and microphone capture.");
+      return null;
+    }
+
+    setMediaStatus("requesting");
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true
+        },
+        video: {
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          facingMode: "user"
+        }
+      });
+
+      setMediaStream(stream);
+      setMediaStatus("ready");
+      return stream;
+    } catch {
+      setMediaStatus("blocked");
+      recordEvent("camera_unavailable", "high", "Candidate blocked or dismissed camera/microphone permissions.");
+      return null;
+    }
+  }
+
+  function startListening() {
+    const SpeechRecognitionConstructor = window.SpeechRecognition ?? window.webkitSpeechRecognition;
+
+    if (!SpeechRecognitionConstructor) {
+      setNotice("Speech recognition is not available in this browser. Use Chrome or Edge for live voice capture.");
+      return;
+    }
+
+    stopListening();
+    shouldKeepListeningRef.current = true;
+    setInterimTranscript("");
+
+    const recognition = new SpeechRecognitionConstructor();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = "en-US";
+
+    recognition.onresult = (event) => {
+      let finalTranscript = "";
+      let interim = "";
+
+      for (let index = event.resultIndex; index < event.results.length; index += 1) {
+        const result = event.results[index];
+        const transcript = result[0]?.transcript ?? "";
+
+        if (result.isFinal) {
+          finalTranscript += ` ${transcript}`;
+        } else {
+          interim += ` ${transcript}`;
+        }
+      }
+
+      if (finalTranscript.trim()) {
+        appendActiveAnswer(finalTranscript.trim());
+      }
+
+      setInterimTranscript(interim.trim());
+    };
+
+    recognition.onerror = () => {
+      shouldKeepListeningRef.current = false;
+      setIsListening(false);
+      setNotice("Voice capture paused. Check microphone permission and start listening again.");
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+      if (shouldKeepListeningRef.current) {
+        try {
+          recognition.start();
+          setIsListening(true);
+        } catch {
+          shouldKeepListeningRef.current = false;
+        }
+      }
+    };
+
+    recognitionRef.current = recognition;
+
+    try {
+      recognition.start();
+      setIsListening(true);
+      setNotice("Listening live. The candidate should answer out loud; typed answers are disabled.");
+    } catch {
+      shouldKeepListeningRef.current = false;
+      setIsListening(false);
+    }
+  }
+
+  function stopListening() {
+    shouldKeepListeningRef.current = false;
+    recognitionRef.current?.stop();
+    recognitionRef.current = null;
+    setIsListening(false);
   }
 
   function recordEvent(type: ProctoringEvent["type"], severity: ProctoringEvent["severity"], details: string) {
@@ -252,19 +426,25 @@ export function App() {
           activeAnswer={activeAnswer}
           activeQuestion={activeQuestion}
           activeQuestionIndex={activeQuestionIndex}
+          aiResponse={aiResponse}
           canEvaluate={canEvaluate}
-          codeDraft={codeDraft}
           evaluation={evaluation}
+          interimTranscript={interimTranscript}
+          isListening={isListening}
           isSpeaking={isSpeaking}
+          mediaStatus={mediaStatus}
+          mediaStream={mediaStream}
           plan={plan}
           proctoringEvents={proctoringEvents}
           progress={currentProgress}
-          onCodeChange={setCodeDraft}
           onEvaluate={evaluateCurrentAnswer}
+          onFacialSample={(sample) => setFacialSignals((current) => [...current.slice(-60), sample])}
           onNext={goToNextQuestion}
           onSpeak={() => speakQuestion(activeQuestion)}
-          onUpdateAnswer={updateActiveAnswer}
+          onStartListening={startListening}
+          onStopListening={stopListening}
           onViewDashboard={() => setScreen("dashboard")}
+          visualSummary={visualSummary}
         />
       ) : null}
 
@@ -275,6 +455,8 @@ export function App() {
           plan={plan}
           proctoringSummary={proctoringSummary}
           trustScore={trustScore}
+          transcript={Object.values(answers).join("\n\n")}
+          visualSummary={visualSummary}
           onBackToSetup={() => setScreen("setup")}
         />
       ) : null}
@@ -534,8 +716,8 @@ function OnboardingScreen({
       <div className="centerIntro">
         <h1>You're almost ready, Alex.</h1>
         <p>
-          Before the AI interview begins, review what the session captures. This consent flow is calm by design:
-          transparent, explicit, and candidate-friendly.
+          Before the AI interview begins, review what the session captures. This live flow uses your camera,
+          microphone, spoken transcript, and facial/presence signals to create the final report.
         </p>
       </div>
 
@@ -546,7 +728,7 @@ function OnboardingScreen({
             <span>MIC</span>
           </div>
           <h2>Visual and audio connection</h2>
-          <p>Camera and microphone help capture responses naturally and create a fair record of the session.</p>
+          <p>Camera and microphone let Onboard AI listen, respond out loud, and capture visible communication signals.</p>
           <strong className="readyPill">Systems ready</strong>
         </article>
 
@@ -558,7 +740,7 @@ function OnboardingScreen({
 
         <article className="consentCard indigo">
           <h3>Privacy first</h3>
-          <p>Interview data should be encrypted, access-limited, and automatically deleted after your retention window.</p>
+          <p>Facial signals should be used as context only, not as the only reason to reject or advance a candidate.</p>
         </article>
 
         <article className="consentCard dark horizontal">
@@ -579,7 +761,7 @@ function OnboardingScreen({
           <input checked={consentAccepted} onChange={(event) => onConsentChange(event.target.checked)} type="checkbox" />
           <span>
             I understand and agree to the assessment guidelines and privacy policy. I consent to video, audio,
-            and screen-focus capture for this session.
+            speech transcription, facial/presence signal capture, and screen-focus monitoring for this session.
           </span>
         </label>
         <button className="primaryAction wideAction" disabled={!canStart} onClick={onStartInterview} type="button">
@@ -596,37 +778,97 @@ function InterviewScreen({
   activeAnswer,
   activeQuestion,
   activeQuestionIndex,
+  aiResponse,
   canEvaluate,
-  codeDraft,
   evaluation,
+  interimTranscript,
+  isListening,
   isSpeaking,
+  mediaStatus,
+  mediaStream,
   plan,
   proctoringEvents,
   progress,
-  onCodeChange,
   onEvaluate,
+  onFacialSample,
   onNext,
   onSpeak,
-  onUpdateAnswer,
-  onViewDashboard
+  onStartListening,
+  onStopListening,
+  onViewDashboard,
+  visualSummary
 }: {
   activeAnswer: string;
   activeQuestion: InterviewQuestion | null;
   activeQuestionIndex: number;
+  aiResponse: string;
   canEvaluate: boolean;
-  codeDraft: string;
   evaluation: AnswerEvaluation | null;
+  interimTranscript: string;
+  isListening: boolean;
   isSpeaking: boolean;
+  mediaStatus: "idle" | "requesting" | "ready" | "blocked";
+  mediaStream: MediaStream | null;
   plan: InterviewPlan | null;
   proctoringEvents: ProctoringEvent[];
   progress: number;
-  onCodeChange: (value: string) => void;
   onEvaluate: () => void;
+  onFacialSample: (sample: FacialSignalSample) => void;
   onNext: () => void;
   onSpeak: () => void;
-  onUpdateAnswer: (value: string) => void;
+  onStartListening: () => void;
+  onStopListening: () => void;
   onViewDashboard: () => void;
+  visualSummary: FacialSignalSummary;
 }) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const onFacialSampleRef = useRef(onFacialSample);
+
+  useEffect(() => {
+    onFacialSampleRef.current = onFacialSample;
+  }, [onFacialSample]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+
+    if (!video || !mediaStream) {
+      return;
+    }
+
+    video.srcObject = mediaStream;
+    void video.play();
+  }, [mediaStream]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+
+    if (!video || !mediaStream) {
+      return;
+    }
+
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    let previousFrame: Uint8ClampedArray | null = null;
+
+    const interval = window.setInterval(() => {
+      if (!context || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+        return;
+      }
+
+      const width = 96;
+      const height = 54;
+      canvas.width = width;
+      canvas.height = height;
+      context.drawImage(video, 0, 0, width, height);
+      const frame = context.getImageData(0, 0, width, height).data;
+      const sample = buildFacialSignalSample(frame, previousFrame);
+      previousFrame = new Uint8ClampedArray(frame);
+      onFacialSampleRef.current(sample);
+    }, 1600);
+
+    return () => window.clearInterval(interval);
+  }, [mediaStream]);
+
   if (!plan || !activeQuestion) {
     return (
       <section className="page">
@@ -658,41 +900,62 @@ function InterviewScreen({
 
       <div className="workspaceGrid">
         <section className="interviewPanel">
-          <div className="aiInterviewer">
-            <div className="avatarRing">AI</div>
-            <div>
-              <span>{isSpeaking ? "Speaking" : "Luminary Onboard AI"}</span>
-              <p>{activeQuestion.followUps[0]}</p>
+          <div className="liveInterviewGrid">
+            <div className="cameraStage">
+              <video aria-label="Candidate live camera preview" autoPlay muted playsInline ref={videoRef} />
+              <div className="cameraOverlay">
+                <span className={mediaStatus === "ready" ? "cameraStatus ready" : "cameraStatus blocked"}>
+                  {mediaStatus === "ready" ? "Camera live" : "Camera pending"}
+                </span>
+                <span>Expression signal: {visualSummary.dominantExpression.replace("-", " ")}</span>
+              </div>
             </div>
-            <button className="secondaryAction compact" onClick={onSpeak} type="button">
-              Replay
-            </button>
+
+            <div className="aiInterviewer live">
+              <div className="avatarRing">AI</div>
+              <div>
+                <span>{isSpeaking ? "Speaking question" : isListening ? "Listening live" : "Onboard AI interviewer"}</span>
+                <p>{aiResponse}</p>
+              </div>
+            </div>
           </div>
 
-          <label>
-            Candidate response
-            <textarea
-              className="answerInput"
-              onChange={(event) => onUpdateAnswer(event.target.value)}
-              placeholder="Explain your reasoning, tradeoffs, and validation approach..."
-              rows={activeQuestion.round === "coding" ? 7 : 12}
-              value={activeAnswer}
-            />
-          </label>
+          <div className="voiceControls">
+            <button className="secondaryAction" onClick={onSpeak} type="button">
+              Replay AI question
+            </button>
+            {isListening ? (
+              <button className="secondaryAction dangerAction" onClick={onStopListening} type="button">
+                Pause listening
+              </button>
+            ) : (
+              <button className="primaryAction" onClick={onStartListening} type="button">
+                Start listening
+              </button>
+            )}
+          </div>
+
+          <div className="transcriptPanel">
+            <div className="transcriptHeader">
+              <div>
+                <p className="eyebrow">Voice transcript</p>
+                <h2>No typed answers</h2>
+              </div>
+              <span className={isListening ? "listeningBadge active" : "listeningBadge"}>{isListening ? "Listening" : "Paused"}</span>
+            </div>
+            <div className="transcriptBody">
+              {activeAnswer ? <p>{activeAnswer}</p> : <p className="muted">The candidate's spoken answer will appear here automatically.</p>}
+              {interimTranscript ? <p className="interimTranscript">{interimTranscript}</p> : null}
+            </div>
+          </div>
 
           {activeQuestion.round === "coding" ? (
-            <div className="codeWorkspace">
-              <div className="codeTopBar">
-                <span>JavaScript</span>
-                <strong>Console: Test passed, result = 4</strong>
-              </div>
-              <textarea
-                aria-label="Coding editor"
-                className="codeEditor"
-                onChange={(event) => onCodeChange(event.target.value)}
-                spellCheck={false}
-                value={codeDraft}
-              />
+            <div className="voiceCodingPrompt">
+              <span>Voice-first coding round</span>
+              <p>
+                Ask the candidate to explain the algorithm verbally. The MVP captures reasoning through speech;
+                the optional code editor can be added later for live coding.
+              </p>
             </div>
           ) : null}
 
@@ -701,10 +964,10 @@ function InterviewScreen({
               Next question
             </button>
             <button className="primaryAction" disabled={!canEvaluate} onClick={onEvaluate} type="button">
-              Evaluate answer
+              Evaluate live answer
             </button>
             <button className="secondaryAction" onClick={onViewDashboard} type="button">
-              Recruiter dashboard
+              Final report
             </button>
           </div>
         </section>
@@ -742,6 +1005,14 @@ function InterviewScreen({
               <p>Submit an answer to generate the recruiter report.</p>
             </div>
           )}
+
+          <div className="visualSignalCard">
+            <h3>Facial and presence signals</h3>
+            <SignalRow label="Visibility" value={visualSummary.visibilityScore} />
+            <SignalRow label="Lighting" value={visualSummary.lightingScore} />
+            <SignalRow label="Expression energy" value={visualSummary.expressionEnergy} />
+            <p>{visualSummary.observations[0]}</p>
+          </div>
         </aside>
       </div>
     </section>
@@ -753,14 +1024,18 @@ function DashboardScreen({
   fitScore,
   plan,
   proctoringSummary,
+  transcript,
   trustScore,
+  visualSummary,
   onBackToSetup
 }: {
   evaluation: AnswerEvaluation | null;
   fitScore: number;
   plan: InterviewPlan | null;
   proctoringSummary: ProctoringSummary | null;
+  transcript: string;
   trustScore: number;
+  visualSummary: FacialSignalSummary;
   onBackToSetup: () => void;
 }) {
   const candidates = [
@@ -771,7 +1046,9 @@ function DashboardScreen({
       trust: trustScore,
       trustLabel: proctoringSummary?.riskLevel === "high" ? "Review Needed" : "Verified",
       tags: plan?.job.skills.slice(0, 3) ?? ["React", "Node.js", "System Design"],
-      note: evaluation?.summary ?? "Awaiting final candidate evaluation.",
+      note: evaluation
+        ? `${evaluation.summary} Visual signal: ${visualSummary.dominantExpression.replace("-", " ")}.`
+        : "Awaiting final candidate evaluation.",
       selected: true
     },
     {
@@ -900,8 +1177,213 @@ function DashboardScreen({
           </table>
         </div>
       </section>
+
+      <section className="finalReportGrid">
+        <article className="finalReportCard">
+          <p className="eyebrow">Live interview transcript</p>
+          <h2>Spoken answer record</h2>
+          <p>{transcript || "No spoken transcript captured yet. Run the live interview and start listening first."}</p>
+        </article>
+
+        <article className="finalReportCard">
+          <p className="eyebrow">Facial signal report</p>
+          <h2>{visualSummary.dominantExpression.replace("-", " ")} presence</h2>
+          <SignalRow label="Visibility" value={visualSummary.visibilityScore} />
+          <SignalRow label="Lighting" value={visualSummary.lightingScore} />
+          <SignalRow label="Expression energy" value={visualSummary.expressionEnergy} />
+          <ul>
+            {visualSummary.observations.map((observation) => (
+              <li key={observation}>{observation}</li>
+            ))}
+          </ul>
+        </article>
+
+        <article className="finalReportCard">
+          <p className="eyebrow">Evaluation note</p>
+          <h2>Responsible use</h2>
+          <p>
+            The report combines spoken content, communication structure, proctoring events, and camera-derived
+            visibility/expression-energy signals. Facial signals are contextual and should not be used as the sole
+            hiring decision factor.
+          </p>
+        </article>
+      </section>
     </section>
   );
+}
+
+function SignalRow({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="signalRow">
+      <span>{label}</span>
+      <strong>{value}%</strong>
+      <i>
+        <b style={{ width: `${value}%` }} />
+      </i>
+    </div>
+  );
+}
+
+function buildFacialSignalSample(
+  frame: Uint8ClampedArray,
+  previousFrame: Uint8ClampedArray | null
+): FacialSignalSample {
+  let luminanceTotal = 0;
+  let motionTotal = 0;
+  let contrastTotal = 0;
+  const pixelCount = frame.length / 4;
+
+  for (let index = 0; index < frame.length; index += 4) {
+    const luminance = frame[index] * 0.2126 + frame[index + 1] * 0.7152 + frame[index + 2] * 0.0722;
+    luminanceTotal += luminance;
+    contrastTotal += Math.abs(luminance - 128);
+
+    if (previousFrame) {
+      const previousLuminance =
+        previousFrame[index] * 0.2126 + previousFrame[index + 1] * 0.7152 + previousFrame[index + 2] * 0.0722;
+      motionTotal += Math.abs(luminance - previousLuminance);
+    }
+  }
+
+  const averageLuminance = luminanceTotal / pixelCount;
+  const averageMotion = previousFrame ? motionTotal / pixelCount : 0;
+  const averageContrast = contrastTotal / pixelCount;
+  const lightingScore = clampScore(Math.round(100 - Math.abs(averageLuminance - 135) * 0.65), 0, 100);
+  const visibilityScore = clampScore(Math.round(lightingScore * 0.62 + Math.min(100, averageContrast * 1.9) * 0.38), 0, 100);
+  const expressionEnergy = clampScore(Math.round(averageMotion * 4.8), 0, 100);
+
+  return {
+    occurredAt: new Date().toISOString(),
+    visibilityScore,
+    lightingScore,
+    expressionEnergy,
+    expressionLabel: classifyExpressionSignal(visibilityScore, expressionEnergy)
+  };
+}
+
+function summarizeFacialSignals(samples: FacialSignalSample[]): FacialSignalSummary {
+  if (!samples.length) {
+    return {
+      sampleCount: 0,
+      visibilityScore: 85,
+      lightingScore: 85,
+      expressionEnergy: 50,
+      dominantExpression: "engaged",
+      sessionQualityScore: 88,
+      observations: [
+        "Camera analysis has not started yet. The report will update after the live interview begins."
+      ]
+    };
+  }
+
+  const recentSamples = samples.slice(-45);
+  const visibilityScore = averageScore(recentSamples.map((sample) => sample.visibilityScore));
+  const lightingScore = averageScore(recentSamples.map((sample) => sample.lightingScore));
+  const expressionEnergy = averageScore(recentSamples.map((sample) => sample.expressionEnergy));
+  const dominantExpression = mostFrequent(recentSamples.map((sample) => sample.expressionLabel));
+  const sessionQualityScore = clampScore(
+    Math.round(visibilityScore * 0.48 + lightingScore * 0.28 + expressionEnergyBalance(expressionEnergy) * 0.24),
+    0,
+    100
+  );
+  const observations = [
+    `Dominant visual signal is ${dominantExpression.replace("-", " ")} with ${expressionEnergy}% expression energy.`,
+    visibilityScore < 55
+      ? "Face/presence visibility appears weak; review camera angle or lighting before relying on visual signals."
+      : "Candidate presence remained visible enough for contextual review.",
+    lightingScore < 55
+      ? "Lighting quality is low, so facial signal confidence should be treated carefully."
+      : "Lighting quality is acceptable for a basic browser-native signal."
+  ];
+
+  return {
+    sampleCount: recentSamples.length,
+    visibilityScore,
+    lightingScore,
+    expressionEnergy,
+    dominantExpression,
+    sessionQualityScore,
+    observations
+  };
+}
+
+function enhanceEvaluationWithLiveSignals(
+  evaluation: AnswerEvaluation,
+  visualSummary: FacialSignalSummary
+): AnswerEvaluation {
+  const strengths = [...evaluation.strengths];
+  const concerns = [...evaluation.concerns];
+
+  if (visualSummary.visibilityScore >= 70) {
+    strengths.push("Camera presence remained clear enough to support live-interview review.");
+  } else {
+    concerns.push("Camera visibility was weak, so visual communication signals should be reviewed manually.");
+  }
+
+  if (visualSummary.expressionEnergy >= 35 && visualSummary.expressionEnergy <= 82) {
+    strengths.push("Facial/expression energy suggests active engagement during the spoken response.");
+  } else if (visualSummary.expressionEnergy < 20) {
+    concerns.push("Low expression-energy signal; this may be caused by camera angle, lighting, or a naturally calm style.");
+  }
+
+  return {
+    ...evaluation,
+    strengths,
+    concerns,
+    summary: `${evaluation.summary} Live visual context: ${visualSummary.dominantExpression.replace("-", " ")} presence.`
+  };
+}
+
+function buildInterviewerResponse(evaluation: AnswerEvaluation, question: InterviewQuestion) {
+  if (evaluation.overallScore >= 8) {
+    return `Thank you. That was a strong ${question.round.replace("_", " ")} response. I captured the answer and visual communication signals for the final report.`;
+  }
+
+  if (evaluation.overallScore >= 6) {
+    return `Thank you. I captured your answer. I would like one follow-up: ${question.followUps[0]}`;
+  }
+
+  return `Thank you. I need more detail to evaluate this fairly. ${question.followUps[0]}`;
+}
+
+function classifyExpressionSignal(
+  visibilityScore: number,
+  expressionEnergy: number
+): FacialSignalSample["expressionLabel"] {
+  if (visibilityScore < 35) {
+    return "low-visibility";
+  }
+
+  if (expressionEnergy > 70) {
+    return "animated";
+  }
+
+  if (expressionEnergy > 24) {
+    return "engaged";
+  }
+
+  return "calm";
+}
+
+function expressionEnergyBalance(value: number) {
+  return clampScore(100 - Math.abs(value - 52), 0, 100);
+}
+
+function averageScore(values: number[]) {
+  if (!values.length) {
+    return 0;
+  }
+
+  return clampScore(Math.round(values.reduce((total, value) => total + value, 0) / values.length), 0, 100);
+}
+
+function mostFrequent<T extends string>(values: T[]) {
+  const counts = values.reduce<Record<string, number>>((total, value) => {
+    total[value] = (total[value] ?? 0) + 1;
+    return total;
+  }, {});
+
+  return values.reduce((highest, value) => (counts[value] > counts[highest] ? value : highest), values[0]);
 }
 
 function ScoreGrid({ evaluation }: { evaluation: AnswerEvaluation }) {
@@ -942,6 +1424,10 @@ function trustScoreFromRisk(risk: RiskLevel) {
   }
 
   return 96;
+}
+
+function clampScore(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
 }
 
 function initials(name: string) {

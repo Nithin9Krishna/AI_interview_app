@@ -12,6 +12,10 @@ Cross-platform MVP for an AI-powered interview product with web, Android, iPhone
 - Candidate answer scoring
 - Landing page, recruiter setup, onboarding/consent, focused interview room, coding workspace, and candidate comparison dashboard
 - Local "Onboard AI" interview flow that works without the backend
+- Live camera and microphone interview room
+- AI interviewer speaks questions with browser text-to-speech
+- Candidate answers are captured through browser speech recognition instead of typed answers
+- Browser-native visual signal sampling for camera visibility, lighting, and expression-energy context
 - Basic web proctoring signals for tab blur, copy, paste, and fullscreen exit
 - Mobile-first interview flow with local fallback if the API is not reachable
 
@@ -46,7 +50,9 @@ Start the web app:
 npm run dev:web
 ```
 
-The web app is standalone by default. It generates questions, speaks prompts with the browser speech engine, scores answers, and creates recruiter reports locally through `packages/shared`.
+The web app is standalone by default. It generates questions, speaks prompts with the browser speech engine, listens to candidate answers through browser speech recognition, samples camera-based visual context, scores answers, and creates recruiter reports locally through `packages/shared`.
+
+Live voice capture works best in Chrome or Edge on `localhost` because browser speech recognition support varies. Camera/microphone permissions are required for the live interview room.
 
 Start the mobile app:
 
