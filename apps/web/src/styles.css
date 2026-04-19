@@ -1003,6 +1003,17 @@ h3 {
   background: var(--rose-soft);
 }
 
+.mediaHelp {
+  margin: -0.25rem 0 0;
+  border: 1px solid rgba(217, 119, 6, 0.22);
+  border-radius: 18px;
+  padding: 0.8rem 1rem;
+  color: #92400e;
+  background: var(--amber-soft);
+  font-size: 0.9rem;
+  font-weight: 750;
+}
+
 .transcriptPanel,
 .voiceCodingPrompt,
 .visualSignalCard,

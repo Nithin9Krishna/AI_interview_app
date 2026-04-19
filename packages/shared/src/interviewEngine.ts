@@ -78,7 +78,7 @@ export function generateInterviewPlan(profile: JobProfile): InterviewPlan {
   const primarySkill = skills[0] ?? "the core technology stack";
   const secondarySkill = skills[1] ?? "production engineering";
   const difficulty = SENIORITY_DIFFICULTY[profile.seniority];
-  const roleContext = `${profile.seniority} ${profile.title}`.trim();
+  const humanRole = profile.title.trim() || "this role";
   const isDataRole = skills.some((skill) =>
     [
       "power bi",
@@ -103,8 +103,8 @@ export function generateInterviewPlan(profile: JobProfile): InterviewPlan {
       round: "technical",
       difficulty,
       prompt: isDataRole
-        ? `Walk me through how you would build a reliable ${primarySkill} solution for a real ${roleContext} request. How would you gather requirements, model the data, validate metrics, and handle stakeholder feedback?`
-        : `Walk me through how you would approach a real ${roleContext} task that heavily uses ${primarySkill}. What tradeoffs would you consider?`,
+        ? `Let's make this practical. Imagine a sales leader asks you for a ${primarySkill} dashboard by Friday, but the metrics are not clearly defined yet. How would you clarify the requirement, shape the data model, and make sure the numbers are trustworthy before anyone uses it?`
+        : `Let's ground this in a real day on the job. Suppose your team asks you to deliver a ${primarySkill}-heavy feature for this ${humanRole} role. How would you break down the work, decide what to build first, and explain the tradeoffs to the team?`,
       expectedSignals: [
         "clear technical decomposition",
         `practical experience with ${primarySkill}`,
@@ -113,26 +113,28 @@ export function generateInterviewPlan(profile: JobProfile): InterviewPlan {
       ],
       followUps: [
         isDataRole
-          ? "How would you verify the dashboard numbers match the source of truth?"
-          : "What would you do differently if this had to support 10x more users?",
+          ? "If two departments disagree on the same KPI, how would you handle that conversation?"
+          : "If the scope doubled halfway through, what would you protect and what would you simplify?",
         isDataRole
-          ? "How would you handle a stakeholder asking for a metric that is poorly defined?"
-          : "Which part of your solution would you validate first?"
+          ? "What would you check before sending the dashboard link to leadership?"
+          : "What would you validate first so you are not guessing?"
       ]
     },
     {
       id: createId("q"),
       round: "behavioral",
       difficulty: profile.seniority === "intern" ? "warmup" : "practical",
-      prompt: "Tell me about a time you had to learn something quickly to deliver a project. What was the situation, what did you do, and what was the result?",
+      prompt: isDataRole
+        ? "Tell me about a time someone challenged your numbers, your report, or your analysis. What happened, how did you investigate it, and what did you learn from that situation?"
+        : "Tell me about a time you had to learn something quickly to deliver a project. What was the situation, what did you do, and what was the result?",
       expectedSignals: [
         "specific example",
         "ownership",
         "reflection on outcome"
       ],
       followUps: [
-        "What feedback did you receive?",
-        "What would you change if you did it again?"
+        isDataRole ? "How did you explain the issue to a non-technical stakeholder?" : "What feedback did you receive?",
+        isDataRole ? "What process did you change afterward to avoid the same issue?" : "What would you change if you did it again?"
       ]
     },
     {
@@ -140,23 +142,25 @@ export function generateInterviewPlan(profile: JobProfile): InterviewPlan {
       round: "coding",
       difficulty,
       prompt: isDataRole
-        ? `Design the technical approach for a ${roleContext} reporting task using ${primarySkill} and ${secondarySkill}. Explain the data model, transformations, DAX/SQL logic, refresh strategy, edge cases, and how you would test accuracy.`
-        : `Design an algorithm or implementation plan for a feature in this role that uses ${primarySkill} and ${secondarySkill}. Explain correctness, complexity, and edge cases.`,
+        ? `I am not looking for perfect syntax here. Talk me through how you would build a report using ${primarySkill} and ${secondarySkill}: what tables you would need, what transformations you would do, what DAX or SQL logic might be involved, and how you would test edge cases.`
+        : `I am less interested in perfect code and more interested in your thinking. Talk me through how you would implement a feature that uses ${primarySkill} and ${secondarySkill}, including edge cases, failure modes, and how you would test it.`,
       expectedSignals: [
         isDataRole ? "structured data modeling" : "structured algorithmic thinking",
         isDataRole ? "metric validation" : "complexity discussion",
         "edge case handling"
       ],
       followUps: [
-        isDataRole ? "What data quality checks would you build before publishing?" : "What test cases would give you confidence?",
-        isDataRole ? "What could make this report misleading in production?" : "Where could this implementation break in production?"
+        isDataRole ? "What data quality checks would you automate before refresh or publish?" : "What test cases would give you confidence?",
+        isDataRole ? "What is one way this report could accidentally mislead the business?" : "Where could this implementation break in production?"
       ]
     },
     {
       id: createId("q"),
       round: "system_design",
       difficulty: profile.seniority === "staff" ? "expert" : "deep_dive",
-      prompt: `Design a production-ready system for one major responsibility in this ${profile.title} role. Include APIs, data model, scaling, observability, and security considerations.`,
+      prompt: isDataRole
+        ? `Imagine your dashboard becomes the weekly source of truth for executives. How would you design the full reporting workflow: data sources, refresh schedule, permissions, metric definitions, monitoring, and what happens when the data pipeline fails?`
+        : `Imagine this work becomes business-critical after launch. How would you design the full workflow for one major responsibility in this ${humanRole} role, including data, reliability, security, and how the team would operate it?`,
       expectedSignals: [
         "end-to-end architecture",
         "data modeling",
@@ -164,8 +168,8 @@ export function generateInterviewPlan(profile: JobProfile): InterviewPlan {
         "security awareness"
       ],
       followUps: [
-        "What would you monitor first after launch?",
-        "How would you handle a privacy or data retention requirement?"
+        isDataRole ? "How would you alert the business if a refresh fails or a source table changes?" : "What would you monitor first after launch?",
+        isDataRole ? "How would you manage access if different teams should see different slices of data?" : "How would you handle a privacy or data retention requirement?"
       ]
     }
   ];

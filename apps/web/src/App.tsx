@@ -162,16 +162,10 @@ export function App() {
       return;
     }
 
-    const stream = await requestLiveMedia();
-
-    if (!stream) {
-      setNotice("Camera and microphone access are required for the live AI interview.");
-      return;
-    }
-
     setFocusModeStarted(true);
     setScreen("interview");
-    setNotice("Live interview room started. Camera, microphone, voice transcript, and visual signals are active.");
+    setNotice("Opening the live interview room. Allow camera and microphone access when the browser asks.");
+    const mediaRequest = requestLiveMedia();
 
     if (!document.fullscreenElement) {
       await document.documentElement.requestFullscreen().catch(() => {
@@ -179,7 +173,15 @@ export function App() {
       });
     }
 
-    speakQuestion(activeQuestion);
+    const stream = await mediaRequest;
+
+    if (!stream) {
+      setNotice("Interview room is open, but camera/microphone access is blocked. Use the retry button in the interview room.");
+      return;
+    }
+
+    setNotice("Live interview room started. Camera, microphone, voice transcript, and visual signals are active.");
+    window.setTimeout(() => speakQuestion(activeQuestion), 250);
   }
 
   function evaluateCurrentAnswer() {
@@ -235,7 +237,7 @@ export function App() {
   }
 
   function speakQuestion(question: InterviewQuestion | null) {
-    if (!question || !("speechSynthesis" in window)) {
+    if (!question) {
       return;
     }
 
@@ -247,7 +249,7 @@ export function App() {
   function speakText(text: string, listenAfterSpeech: boolean) {
     if (!("speechSynthesis" in window)) {
       if (listenAfterSpeech) {
-        startListening();
+        void startLiveListening();
       }
       return;
     }
@@ -260,16 +262,27 @@ export function App() {
     utterance.onend = () => {
       setIsSpeaking(false);
       if (listenAfterSpeech) {
-        startListening();
+        void startLiveListening();
       }
     };
     utterance.onerror = () => {
       setIsSpeaking(false);
       if (listenAfterSpeech) {
-        startListening();
+        void startLiveListening();
       }
     };
     window.speechSynthesis.speak(utterance);
+  }
+
+  async function startLiveListening() {
+    const stream = mediaStream ?? (await requestLiveMedia());
+
+    if (!stream) {
+      setNotice("Camera/microphone permission is required before the AI can listen. Click retry and allow access.");
+      return;
+    }
+
+    startListening();
   }
 
   async function requestLiveMedia() {
@@ -459,8 +472,9 @@ export function App() {
           onEvaluate={evaluateCurrentAnswer}
           onFacialSample={(sample) => setFacialSignals((current) => [...current.slice(-60), sample])}
           onNext={goToNextQuestion}
+          onRequestMedia={() => void requestLiveMedia()}
           onSpeak={() => speakQuestion(activeQuestion)}
-          onStartListening={startListening}
+          onStartListening={() => void startLiveListening()}
           onStopListening={stopListening}
           onViewDashboard={() => setScreen("dashboard")}
           visualSummary={visualSummary}
@@ -816,6 +830,7 @@ function InterviewScreen({
   onEvaluate,
   onFacialSample,
   onNext,
+  onRequestMedia,
   onSpeak,
   onStartListening,
   onStopListening,
@@ -839,6 +854,7 @@ function InterviewScreen({
   onEvaluate: () => void;
   onFacialSample: (sample: FacialSignalSample) => void;
   onNext: () => void;
+  onRequestMedia: () => void;
   onSpeak: () => void;
   onStartListening: () => void;
   onStopListening: () => void;
@@ -947,6 +963,11 @@ function InterviewScreen({
           </div>
 
           <div className="voiceControls">
+            {mediaStatus !== "ready" ? (
+              <button className="primaryAction" onClick={onRequestMedia} type="button">
+                {mediaStatus === "requesting" ? "Waiting for permission..." : "Retry camera and mic"}
+              </button>
+            ) : null}
             <button className="secondaryAction" onClick={onSpeak} type="button">
               Replay AI question
             </button>
@@ -955,11 +976,17 @@ function InterviewScreen({
                 Pause listening
               </button>
             ) : (
-              <button className="primaryAction" onClick={onStartListening} type="button">
+              <button className="primaryAction" disabled={mediaStatus !== "ready"} onClick={onStartListening} type="button">
                 Start listening
               </button>
             )}
           </div>
+          {mediaStatus !== "ready" ? (
+            <p className="mediaHelp">
+              If the browser blocked access, click the camera icon in the address bar, allow camera and microphone,
+              then retry. You can still see the interview room while fixing permissions.
+            </p>
+          ) : null}
 
           <div className="transcriptPanel">
             <div className="transcriptHeader">
